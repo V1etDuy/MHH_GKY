@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebGIS Khách Sạn TPDN</title>
+  <link rel="stylesheet" href="https://unpkg.com/ol/ol.css" />
+  <script src="https://unpkg.com/ol/dist/ol.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body,
+    html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+    }
+
+    #container {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #sidebar {
+      width: 300px;
+      background: #f9f9f9;
+      border-right: 1px solid #ccc;
+      padding: 15px;
+      overflow-y: auto;
+    }
+
+    #sidebar h2 {
+      font-size: 20px;
+      margin-bottom: 15px;
+      color: #333;
+    }
+
+    #map {
+      flex: 1;
+      height: 100%;
+    }
+
+    #popup {
+      background: white;
+      padding: 12px;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+      position: absolute;
+      display: none;
+      z-index: 1000;
+      min-width: 220px;
+      max-width: 280px;
+      border: 1px solid #ccc;
+      font-size: 14px;
+    }
+
+    #popup img {
+      width: 100%;
+      border-radius: 8px;
+      margin-top: 8px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+      transition: transform 0.3s ease;
+    }
+
+    #popup img:hover {
+      transform: scale(1.05);
+    }
+
+
+    select,
+    input[type="file"],
+    button {
+      width: 100%;
+      padding: 8px;
+      margin: 8px 0 15px 0;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    #hotelList>div {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    .btn-navigate {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 6px 10px;
+      margin-top: 5px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="container">
+    <div id="sidebar">
+      <h2>WebGIS Khách Sạn TPDN</h2>
+      <input type="file" id="fileInput" accept=".csv" />
+      <label for="filterStars">Lọc theo sao:</label>
+      <select id="filterStars" onchange="filterHotels()">
+        <option value="">Tất cả</option>
+        <option value="3">3 Sao</option>
+        <option value="4">4 Sao</option>
+        <option value="5">5 Sao</option>
+      </select>
+      <button id="toggleAddMode" onclick="toggleAddHotelMode()">🛎️ Thêm khách sạn</button>
+      <button onclick="exportCSV()">📁 Tải CSV</button>
+      <div id="hotelList"></div>
+    </div>
+    <div id="map"></div>
+    <div id="popup" class="popup"></div>
+  </div>
+
+  <script>
+    let map = new ol.Map({
+      target: 'map',
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({ center: ol.proj.fromLonLat([108.221, 16.075]), zoom: 14 })
+    });
+
+    let vectorLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
+    map.addLayer(vectorLayer);
+
+    let hotelList = document.getElementById('hotelList');
+    let popup = document.getElementById('popup');
+    let hotelData = [];
+    let isAddingHotel = false;
+
+    document.getElementById('fileInput').addEventListener('change', function (event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        const rows = e.target.result.split('\n').slice(1);
+        const source = vectorLayer.getSource();
+        source.clear();
+        hotelList.innerHTML = "";
+        hotelData = [];
+
+        rows.forEach(row => {
+          if (!row.trim()) return;
+          let cols = row.match(/(".*?"|[^,]+)(?=,|$)/g);
+          cols = cols ? cols.map(col => col.replace(/^"|"$/g, '').trim()) : [];
+          if (cols.length < 8) return;
+
+          let [x, y, id, name, address, phone, stars, img] = cols;
+          const coord = [parseFloat(x), parseFloat(y)];
+
+          hotelData.push({ x, y, id, name, address, phone, stars, img });
+          addFeatureToMap(coord, name, address, phone, stars, img);
+          addHotelToList(name, stars, coord);
+        });
+      };
+      reader.readAsText(file);
+    });
+
+    function addFeatureToMap(coord, name, address, phone, stars, img) {
+      let feature = new ol.Feature({
+        geometry: new ol.geom.Point(coord),
+        name, address, phone, stars, img,
+        lon: ol.proj.toLonLat(coord)[0],
+        lat: ol.proj.toLonLat(coord)[1]
+      });
+
+      feature.setStyle(new ol.style.Style({
+        image: new ol.style.Icon({ src: `star.png`, scale: 0.1 })
+      }));
+
+      vectorLayer.getSource().addFeature(feature);
+    }
+
+    function addHotelToList(name, stars, coord) {
+      let [lon, lat] = ol.proj.toLonLat(coord);
+      let hotelItem = document.createElement("div");
+      hotelItem.innerHTML = `
+        <strong>${name}</strong><br/>
+        ${stars} Sao<br/>
+        <button class="btn-navigate" onclick="navigateTo(${lon}, ${lat})">Đi tới</button>
+      `;
+      hotelList.appendChild(hotelItem);
+    }
+
+    function filterHotels() {
+      let selectedStars = document.getElementById('filterStars').value;
+      let source = vectorLayer.getSource();
+
+      // Cập nhật hiển thị marker trên map
+      source.getFeatures().forEach(feature => {
+        const featureStars = feature.get('stars');
+        const visible = selectedStars === "" || featureStars === selectedStars;
+        feature.setStyle(
+          visible ? new ol.style.Style({ image: new ol.style.Icon({ src: `star.png`, scale: 0.1 }) }) : null
+        );
+      });
+
+      // Cập nhật danh sách bên trái
+      hotelList.innerHTML = "";
+      hotelData.forEach(h => {
+        if (selectedStars === "" || h.stars === selectedStars) {
+          let coord = [parseFloat(h.x), parseFloat(h.y)];
+          addHotelToList(h.name, h.stars, coord);
+        }
+      });
+    }
+
+
+    function toggleAddHotelMode() {
+      isAddingHotel = !isAddingHotel;
+      const btn = document.getElementById('toggleAddMode');
+      btn.textContent = isAddingHotel ? "❌ Tắt chế độ thêm" : "🛎️ Thêm khách sạn";
+      btn.style.backgroundColor = isAddingHotel ? "#dc3545" : "#007bff";
+      btn.style.color = "#fff";
+    }
+
+    function exportCSV() {
+      let csv = "x,y,id,name,address,phone,stars,img\n";
+      hotelData.forEach(h => {
+        csv += `"${h.x}","${h.y}","${h.id}","${h.name}","${h.address}","${h.phone}","${h.stars}","${h.img}"\n`;
+      });
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "khachsan_danang.csv";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    function navigateTo(lon, lat) {
+      map.getView().animate({ center: ol.proj.fromLonLat([lon, lat]), zoom: 16, duration: 1000 });
+    }
+
+    map.on('click', function (evt) {
+      if (isAddingHotel) {
+        const lonLat = ol.proj.toLonLat(evt.coordinate);
+        const name = prompt("Tên khách sạn:");
+        if (!name) return;
+        const address = prompt("Địa chỉ:");
+        const phone = prompt("Số điện thoại:");
+        const stars = prompt("Số sao (3, 4, 5):");
+        const img = prompt("Đường dẫn ảnh (URL):") || "placeholder.png";
+
+        addFeatureToMap(evt.coordinate, name, address, phone, stars, img);
+        addHotelToList(name, stars, evt.coordinate);
+
+        hotelData.push({
+          x: evt.coordinate[0],
+          y: evt.coordinate[1],
+          id: "new_" + Date.now(),
+          name, address, phone, stars, img
+        });
+
+        alert("✅ Đã thêm khách sạn mới!");
+        return;
+      }
+
+      let feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
+      if (feature) {
+        let { name, address, stars, phone, img } = feature.getProperties();
+
+        popup.innerHTML = `
+      <div style="max-width: 250px;">
+        <div style="font-size: 16px; font-weight: bold; color: #333; margin-bottom: 5px;">${name}</div>
+        <div style="color: #555; margin-bottom: 4px;">📍 ${address}</div>
+        <div style="color: #555; margin-bottom: 4px;">⭐ ${stars} Sao</div>
+        <div style="color: #555; margin-bottom: 8px;">📞 ${phone}</div>
+        <img src="${img}" alt="Hotel Image" onerror="this.onerror=null; this.src='placeholder.png';">
+      </div>
+    `;
+
+        // Hiển thị popup tại vị trí địa lý
+        const coordinate = feature.getGeometry().getCoordinates();
+        const pixel = map.getPixelFromCoordinate(coordinate);
+        popup.style.left = `${pixel[0]}px`;
+        popup.style.top = `${pixel[1]}px`;
+        popup.style.display = 'block';
+      } else {
+        popup.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+
+</html>
